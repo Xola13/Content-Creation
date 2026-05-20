@@ -76,29 +76,42 @@ def _safe_parse_json(raw: str, context: str = "") -> dict:
 
 def pick_best_topic(topics: list) -> dict:
     """
-    Choose the most monetizable topic for a South African YouTube finance channel.
+    From a global trending list, choose the topic with the highest viral +
+    monetisation potential that can be contextualised for a South African audience.
 
-    Returns: {"topic": str, "title": str, "format": str}
+    Returns: {"topic": str, "title": str, "format": str, "sa_angle": str}
     """
     niche = os.getenv("PREFERRED_NICHE", "finance south africa")
-    topics_str = "\n".join(f"- {t}" for t in topics)
+    # Send the top 30 topics — model picks the single best one
+    topics_str = "\n".join(f"{i+1}. {t}" for i, t in enumerate(topics[:30]))
 
     messages = [
         {
             "role": "system",
             "content": (
-                "You are a YouTube strategist specialising in South African personal finance content. "
+                "You are a YouTube growth strategist who creates viral finance content. "
+                "Your channel targets South African viewers but covers GLOBAL trending topics, "
+                "always giving them a South African angle (how it affects SA, rand, jobs, economy). "
+                "Globally viral topics get far more impressions than local-only topics. "
                 "You always respond with valid JSON only — no extra text."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"From the following trending topics, pick the ONE best topic for a {niche} YouTube channel "
-                "that will get the most views and ad revenue.\n\n"
-                f"Topics:\n{topics_str}\n\n"
+                f"These are the most trending topics WORLDWIDE right now:\n\n{topics_str}\n\n"
+                f"Pick the ONE topic that:\n"
+                f"1. Is trending globally (maximum search volume and virality)\n"
+                f"2. Can be given a strong South African angle (how it impacts SA people, rand, jobs, cost of living)\n"
+                f"3. Has high ad CPM potential in the {niche} niche\n"
+                f"4. Will attract both SA viewers AND global English-speaking viewers\n\n"
                 "Respond ONLY with this JSON structure:\n"
-                '{"topic": "<chosen topic>", "title": "<catchy YouTube title>", "format": "<e.g. listicle|explainer|news>"}'
+                "{\n"
+                '  "topic": "<the chosen global topic>",\n'
+                '  "title": "<YouTube title — include SA angle, numbers, urgency>",\n'
+                '  "format": "<listicle|explainer|news|reaction|breakdown>",\n'
+                '  "sa_angle": "<one sentence: how this global topic specifically impacts South Africans>"\n'
+                "}"
             ),
         },
     ]
@@ -106,13 +119,15 @@ def pick_best_topic(topics: list) -> dict:
     raw = _call_groq(messages)
     result = _safe_parse_json(raw, "pick_best_topic")
 
-    # Provide safe defaults if parsing partially failed
+    # Safe defaults
     if not result.get("topic"):
-        result["topic"] = topics[0] if topics else "South Africa economy"
+        result["topic"] = topics[0] if topics else "global economy impact on South Africa"
     if not result.get("title"):
         result["title"] = result["topic"]
     if not result.get("format"):
         result["format"] = "explainer"
+    if not result.get("sa_angle"):
+        result["sa_angle"] = f"How {result['topic']} affects South Africa"
 
     logger.info(f"Selected topic: {result['topic']}")
     return result
@@ -134,35 +149,42 @@ def generate_script(topic_data: dict) -> dict:
     topic = topic_data.get("topic", "")
     title = topic_data.get("title", topic)
     fmt = topic_data.get("format", "explainer")
+    sa_angle = topic_data.get("sa_angle", f"How {topic} affects South Africa")
 
     messages = [
         {
             "role": "system",
             "content": (
-                "You are an expert YouTube scriptwriter for South African finance content. "
-                "Your scripts are engaging, educational, and optimised for watch time. "
+                "You are an expert YouTube scriptwriter who creates viral finance content "
+                "on GLOBAL trending topics with a South African lens. "
+                "Your scripts hook global viewers with the trending topic, then deliver "
+                "the SA-specific impact — maximising both reach and relevance. "
                 "You always respond with valid JSON only — no extra text."
             ),
         },
         {
             "role": "user",
             "content": (
-                f"Write a {fmt} YouTube video script about: '{title}'\n\n"
-                "Requirements:\n"
+                f"Write a {fmt} YouTube video script about the globally trending topic: '{title}'\n\n"
+                f"South African angle to weave throughout: {sa_angle}\n\n"
+                "Script requirements:\n"
                 "- 400-600 words total\n"
-                "- Strong hook in the first 15 seconds\n"
-                "- Exactly 4 content sections with clear headings\n"
-                "- End with a subscribe + like CTA\n"
-                "- South African context and examples throughout\n\n"
-                "Also generate SEO metadata:\n"
-                "- description: 150-word SEO-optimised video description with keywords\n"
-                "- tags: list of exactly 15 relevant YouTube tags\n\n"
+                "- Hook (first 15s): lead with the GLOBAL trend — make it urgent and relatable\n"
+                "- Section 1: What is happening globally (the trend, the numbers, the stakes)\n"
+                "- Section 2: How this directly impacts South Africans (rand, jobs, prices, economy)\n"
+                "- Section 3: What experts / data say about where this is heading\n"
+                "- Section 4: What South Africans can DO about it (actionable advice)\n"
+                "- CTA: subscribe + like + comment what they think\n\n"
+                "SEO metadata requirements:\n"
+                "- title: include both the global keyword AND 'South Africa' for dual audience\n"
+                "- description: 150-word SEO description — global keyword first, SA impact second\n"
+                "- tags: 15 tags mixing global keywords (high volume) and SA-specific terms\n\n"
                 "Respond ONLY with this JSON structure:\n"
                 "{\n"
                 '  "title": "<final YouTube title>",\n'
                 '  "description": "<150-word SEO description>",\n'
                 '  "tags": ["tag1", "tag2", ...],\n'
-                '  "sections": ["Section 1 heading", "Section 2 heading", ...],\n'
+                '  "sections": ["Section 1 heading", "Section 2 heading", "Section 3 heading", "Section 4 heading"],\n'
                 '  "full_script": "<complete 400-600 word script>"\n'
                 "}"
             ),
