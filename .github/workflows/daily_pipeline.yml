@@ -1,0 +1,154 @@
+name: TrendEmpire Bot — Daily Video Pipeline
+
+on:
+  # Runs daily at 16:00 UTC = 18:00 SAST
+  schedule:
+    - cron: "0 16 * * *"
+
+  # Lets you trigger manually from GitHub → Actions tab (replaces webhook)
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why are you triggering manually?"
+        required: false
+        default: "manual test run"
+
+jobs:
+  run-pipeline:
+    name: Generate & Upload Daily Video
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60       # Kill job if it hangs (saves free minutes)
+
+    steps:
+      # ── 1. Checkout repo ───────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Python setup ────────────────────────────────────────────────────
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: trendempire/requirements.txt
+
+      # ── 3. System dependencies (FFmpeg + ImageMagick) ─────────────────────
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ffmpeg imagemagick
+          # Fix ImageMagick policy so MoviePy TextClip works
+          sudo sed -i 's/rights="none" pattern="PDF"/rights="read|write" pattern="PDF"/' \
+            /etc/ImageMagick-6/policy.xml
+
+      # ── 4. Python packages ─────────────────────────────────────────────────
+      - name: Install Python requirements
+        run: pip install -r trendempire/requirements.txt
+
+      # ── 5. Create output directories ───────────────────────────────────────
+      - name: Prepare output directories
+        run: |
+          mkdir -p trendempire/output/images \
+                   trendempire/output/repurposed/tiktok \
+                   trendempire/output/repurposed/reels \
+                   trendempire/output/repurposed/shorts \
+                   trendempire/output/repurposed/spotify \
+                   trendempire/logs
+
+      # ── 6. Write secrets to .env ───────────────────────────────────────────
+      # All values come from GitHub → Settings → Secrets and variables → Actions
+      - name: Write .env from GitHub Secrets
+        run: |
+          cat > trendempire/.env << 'ENVEOF'
+          GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+          PEXELS_API_KEY=${{ secrets.PEXELS_API_KEY }}
+          YOUTUBE_CLIENT_SECRET_PATH=trendempire/client_secret.json
+          PREFERRED_NICHE=${{ vars.PREFERRED_NICHE || 'finance south africa' }}
+          TTS_VOICE=${{ vars.TTS_VOICE || 'en-ZA-LeahNeural' }}
+          TIKTOK_ACCESS_TOKEN=${{ secrets.TIKTOK_ACCESS_TOKEN }}
+          META_PAGE_ACCESS_TOKEN=${{ secrets.META_PAGE_ACCESS_TOKEN }}
+          META_FACEBOOK_PAGE_ID=${{ secrets.META_FACEBOOK_PAGE_ID }}
+          META_INSTAGRAM_ACCOUNT_ID=${{ secrets.META_INSTAGRAM_ACCOUNT_ID }}
+          TWITTER_API_KEY=${{ secrets.TWITTER_API_KEY }}
+          TWITTER_API_SECRET=${{ secrets.TWITTER_API_SECRET }}
+          TWITTER_ACCESS_TOKEN=${{ secrets.TWITTER_ACCESS_TOKEN }}
+          TWITTER_ACCESS_SECRET=${{ secrets.TWITTER_ACCESS_SECRET }}
+          PINTEREST_ACCESS_TOKEN=${{ secrets.PINTEREST_ACCESS_TOKEN }}
+          PINTEREST_BOARD_ID=${{ secrets.PINTEREST_BOARD_ID }}
+          BUZZSPROUT_PODCAST_ID=${{ secrets.BUZZSPROUT_PODCAST_ID }}
+          BUZZSPROUT_API_KEY=${{ secrets.BUZZSPROUT_API_KEY }}
+          ENVEOF
+
+      # ── 7. Write YouTube OAuth token from secret ───────────────────────────
+      # Store your client_secret.json content as a GitHub Secret (base64 encoded)
+      # Encode it: base64 -w 0 client_secret.json
+      - name: Restore YouTube client_secret.json
+        run: |
+          echo "${{ secrets.YOUTUBE_CLIENT_SECRET_B64 }}" | base64 -d > trendempire/client_secret.json
+
+      # Restore saved OAuth token (so it doesn't ask for browser login each run)
+      - name: Restore YouTube token.pickle
+        run: |
+          if [ -n "${{ secrets.YOUTUBE_TOKEN_PICKLE_B64 }}" ]; then
+            echo "${{ secrets.YOUTUBE_TOKEN_PICKLE_B64 }}" | base64 -d > trendempire/token.pickle
+          fi
+
+      # ── 8. Run the pipeline ────────────────────────────────────────────────
+      - name: Run TrendEmpire pipeline
+        working-directory: trendempire
+        run: python -c "
+          from scheduler.jobs import run_full_pipeline
+          import json, sys
+          result = run_full_pipeline()
+          print(json.dumps(result, indent=2, default=str))
+          if result.get('status') == 'failed':
+              sys.exit(1)
+          "
+
+      # ── 9. Save updated token.pickle back as artifact ─────────────────────
+      # After first run, download this artifact and re-encode as the secret
+      - name: Upload token.pickle as artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: youtube-token
+          path: trendempire/token.pickle
+          retention-days: 7
+          if-no-files-found: ignore
+
+      # ── 10. Upload logs as artifact ────────────────────────────────────────
+      - name: Upload run logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pipeline-logs-${{ github.run_number }}
+          path: |
+            trendempire/logs/bot.log
+            trendempire/logs/last_run.json
+          retention-days: 14
+          if-no-files-found: ignore
+
+      # ── 11. Telegram notification on success ──────────────────────────────
+      - name: Notify Telegram — Success
+        if: success()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="✅ *TrendEmpire Bot* — Video Published!
+          📺 Check your YouTube channel
+          🏃 Run #${{ github.run_number }}
+          ⏰ $(TZ='Africa/Johannesburg' date '+%Y-%m-%d %H:%M') SAST"
+
+      # ── 12. Telegram notification on failure ──────────────────────────────
+      - name: Notify Telegram — Failure
+        if: failure()
+        run: |
+          curl -s -X POST \
+            "https://api.telegram.org/bot${{ secrets.TELEGRAM_BOT_TOKEN }}/sendMessage" \
+            -d chat_id="${{ secrets.TELEGRAM_CHAT_ID }}" \
+            -d parse_mode="Markdown" \
+            -d text="❌ *TrendEmpire Bot* — Pipeline FAILED
+          🏃 Run #${{ github.run_number }}
+          🔍 Logs: https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }}"
