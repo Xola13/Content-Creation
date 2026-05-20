@@ -10,7 +10,7 @@ from datetime import datetime
 
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from bot import trends, ai, tts, visuals, video, uploader, repurpose
+from bot import trends, ai, tts, visuals, video, uploader, repurpose, social
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ def run_full_pipeline() -> dict:
         "youtube_url": None,
         "video_path": None,
         "repurposed_files": {},
+        "social_results": {},
         "errors": [],
     }
 
@@ -179,10 +180,24 @@ def run_full_pipeline() -> dict:
         logger.error(f"Step 9 failed (non-fatal): {exc}")
         summary["errors"].append(f"repurpose: {exc}")
 
+    # ── Step 10: Post to all social platforms ─────────────────────────────────
+    try:
+        logger.info("Step 10: Posting to TikTok, Facebook, Instagram, Twitter, Pinterest, Spotify...")
+        social_results = social.post_to_all_platforms(
+            repurposed=repurposed if "repurposed_files" in summary else {},
+            captions=captions,
+            script=script,
+            youtube_url=summary.get("youtube_url", ""),
+        )
+        summary["social_results"] = social_results
+    except Exception as exc:
+        logger.error(f"Step 10 failed (non-fatal): {exc}")
+        summary["errors"].append(f"social: {exc}")
+
     # ── Cleanup temp images ────────────────────────────────────────────────────
     _cleanup_images(image_paths)
 
-    # ── Step 10: Save summary ──────────────────────────────────────────────────
+    # ── Step 11: Save summary ─────────────────────────────────────────────────
     summary["status"] = "success" if not any("failed" in e for e in summary["errors"]) else "partial"
     summary["completed_at"] = datetime.now().isoformat()
     _save_summary(summary)

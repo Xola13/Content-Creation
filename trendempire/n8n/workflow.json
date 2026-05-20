@@ -1,0 +1,371 @@
+{
+  "name": "TrendEmpire Bot — Full Cross-Platform Pipeline",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 16 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node_schedule",
+      "name": "Daily 18:00 SAST Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 300],
+      "notes": "16:00 UTC = 18:00 SAST (UTC+2). Fires once daily."
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TRENDEMPIRE_BOT_URL }}/webhook/run",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 10000
+        }
+      },
+      "id": "node_trigger_bot",
+      "name": "Trigger TrendEmpire Pipeline",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 300],
+      "notes": "Fires the bot pipeline. Returns immediately — pipeline runs in background."
+    },
+    {
+      "parameters": {
+        "amount": 35,
+        "unit": "minutes"
+      },
+      "id": "node_wait",
+      "name": "Wait 35min (pipeline runs)",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [680, 300],
+      "notes": "Average pipeline time: 15-25 minutes. 35min gives comfortable buffer."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.TRENDEMPIRE_BOT_URL }}/status",
+        "options": {}
+      },
+      "id": "node_get_status",
+      "name": "Get Pipeline Status",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true
+          },
+          "conditions": [
+            {
+              "id": "check_youtube",
+              "leftValue": "={{ $json.last_video_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ]
+        }
+      },
+      "id": "node_check_success",
+      "name": "Did Pipeline Succeed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1120, 300]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "assign_url",
+              "name": "youtube_url",
+              "value": "={{ $json.last_video_url }}",
+              "type": "string"
+            },
+            {
+              "id": "assign_topic",
+              "name": "topic",
+              "value": "={{ $json.last_run.topic }}",
+              "type": "string"
+            },
+            {
+              "id": "assign_social",
+              "name": "social_results",
+              "value": "={{ JSON.stringify($json.last_run.social_results) }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node_extract_data",
+      "name": "Extract Video Data",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.3,
+      "position": [1340, 200]
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=✅ *TrendEmpire Bot* — Video Published!\n\n📌 *Topic:* {{ $json.topic }}\n📺 *YouTube:* {{ $json.youtube_url }}\n\n📱 *Social Results:*\n{{ $json.social_results }}\n\n⏰ {{ new Date().toLocaleString('en-ZA', {timeZone: 'Africa/Johannesburg'}) }} SAST",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node_telegram_success",
+      "name": "Telegram — Success Notification",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1560, 200],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram_creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=❌ *TrendEmpire Bot* — Pipeline FAILED!\n\n🕐 {{ new Date().toLocaleString('en-ZA', {timeZone: 'Africa/Johannesburg'}) }} SAST\n\nCheck logs at: {{ $env.TRENDEMPIRE_BOT_URL }}/status",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node_telegram_fail",
+      "name": "Telegram — Failure Alert",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [1340, 440],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram_creds",
+          "name": "Telegram Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 6 * * *"
+            }
+          ]
+        }
+      },
+      "id": "node_shorts_schedule",
+      "name": "Shorts — 08:00 SAST Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [240, 600],
+      "notes": "06:00 UTC = 08:00 SAST. Posts Shorts in morning for double daily exposure."
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $env.TRENDEMPIRE_BOT_URL }}/status",
+        "options": {}
+      },
+      "id": "node_get_last_video",
+      "name": "Get Last Video Info",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [460, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.TRENDEMPIRE_BOT_URL }}/webhook/repurpose",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Webhook-Secret",
+              "value": "={{ $env.WEBHOOK_SECRET }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "node_repurpose_trigger",
+      "name": "Trigger Repurpose (Shorts format)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [680, 600],
+      "notes": "Re-triggers repurpose step on yesterday's video for morning Shorts post."
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $env.TELEGRAM_CHAT_ID }}",
+        "text": "=📊 *TrendEmpire Daily Report*\n\n🎬 YouTube: {{ $env.TRENDEMPIRE_BOT_URL.replace('/status','') }}\n📅 Date: {{ new Date().toLocaleDateString('en-ZA') }}\n\nCheck /status for full details.",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "node_daily_report",
+      "name": "Telegram — Daily Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [900, 600],
+      "credentials": {
+        "telegramApi": {
+          "id": "telegram_creds",
+          "name": "Telegram Bot"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Daily 18:00 SAST Trigger": {
+      "main": [
+        [
+          {
+            "node": "Trigger TrendEmpire Pipeline",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger TrendEmpire Pipeline": {
+      "main": [
+        [
+          {
+            "node": "Wait 35min (pipeline runs)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait 35min (pipeline runs)": {
+      "main": [
+        [
+          {
+            "node": "Get Pipeline Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Pipeline Status": {
+      "main": [
+        [
+          {
+            "node": "Did Pipeline Succeed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Did Pipeline Succeed?": {
+      "main": [
+        [
+          {
+            "node": "Extract Video Data",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telegram — Failure Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Video Data": {
+      "main": [
+        [
+          {
+            "node": "Telegram — Success Notification",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shorts — 08:00 SAST Trigger": {
+      "main": [
+        [
+          {
+            "node": "Get Last Video Info",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Last Video Info": {
+      "main": [
+        [
+          {
+            "node": "Trigger Repurpose (Shorts format)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Trigger Repurpose (Shorts format)": {
+      "main": [
+        [
+          {
+            "node": "Telegram — Daily Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "meta": {
+    "templateCredsSetupCompleted": false,
+    "instanceId": "trendempire-bot"
+  },
+  "tags": ["trendempire", "youtube", "automation"],
+  "_trendempire_setup_instructions": {
+    "step1_env_vars": {
+      "TRENDEMPIRE_BOT_URL": "http://YOUR_SERVER_IP:5000",
+      "WEBHOOK_SECRET": "same value as in your .env file",
+      "TELEGRAM_CHAT_ID": "get from @userinfobot on Telegram"
+    },
+    "step2_credentials": {
+      "telegram": "Create bot via @BotFather → get token → add as Telegram credential in n8n"
+    },
+    "step3_import": "n8n → Workflows → Import from JSON → paste this file"
+  }
+}
